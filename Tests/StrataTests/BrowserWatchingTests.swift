@@ -95,7 +95,7 @@ import StrataIndex
         #expect(tree.snapshot() == ["folder/"])
     }
 
-    @Test(arguments: [false, true]) func aFileChangedInPlaceWaitsForTheReadUnderWay(readSawIt: Bool) async throws {
+    @Test func aFileListedDifferentlyRereadsTheFolderUnlessAReadIsUnderWay() async throws {
         let tree = try TestTree("folder/")
         let movie = tree.url("folder/movie.mp4")
         let small = file(movie, size: 48), large = file(movie, size: 8240)
@@ -106,31 +106,33 @@ import StrataIndex
         _ = browser.view
         browser.load(tree.url("folder"))
         let opening = try #require(browser.directoryReads.task)
-        try await reads.request(0).finish(.success([small]))
+        let first = try await reads.request(0)
+        // While a read is under way it isn't replaced: it reads the file anew.
+        browser.refreshChangedFiles([large])
+        #expect(browser.directoryReads.task == opening && !opening.isCancelled)
+        first.finish(.success([small]))
         await opening.value
         // Not listed (made meanwhile: the directory watchers have it), or listed as it is: nothing to read.
-        #expect(browser.refreshChangedFiles([file(tree.url("folder/new.mp4"), size: 1)]) == nil)
-        #expect(browser.refreshChangedFiles([small]) == nil)
+        browser.refreshChangedFiles([file(tree.url("folder/new.mp4"), size: 1), small])
         #expect(reads.requests.count == 1 && browser.directoryReads.task == nil)
 
         browser.refresh()
         let underWay = try #require(browser.directoryReads.task)
-        let waiting = try #require(browser.refreshChangedFiles([large]))
+        browser.refreshChangedFiles([large])
         #expect(browser.directoryReads.task == underWay && !underWay.isCancelled)
-        try await reads.request(1).finish(.success([readSawIt ? large : small]))
+        try await reads.request(1).finish(.success([small]))
         await underWay.value
-        await waiting.value
-        if !readSawIt {
-            let rereading = try #require(browser.directoryReads.task)
-            try await reads.request(2).finish(.success([large]))
-            await rereading.value
-        }
-        #expect(reads.requests.count == (readSawIt ? 2 : 3))
+
+        browser.refreshChangedFiles([large])
+        let rereading = try #require(browser.directoryReads.task)
+        try await reads.request(2).finish(.success([large]))
+        await rereading.value
         #expect(browser.visibleRows.map(\.entry.size) == [8240])
+        #expect(reads.requests.count == 3)
         #expect(tree.snapshot() == ["folder/"])
     }
 
-    @Test func aColumnRereadsAFileChangedInPlaceAfterItsReadUnderWay() async throws {
+    @Test func aColumnRereadsAFileListedDifferentlyUnlessAReadIsUnderWay() async throws {
         let environment = try IndependentEnvironment()
         let tree = try TestTree("folder/")
         let movie = tree.url("folder/movie.mp4")
@@ -145,23 +147,56 @@ import StrataIndex
         defer { pane.tearDown() }
         pane.load(showHidden: false, order: ColumnBrowserViewController.defaultOrder(for: controller.preferences))
         let opening = try #require(pane.directoryReads.task)
-        try await reads.request(0).finish(.success([small]))
+        let first = try await reads.request(0)
+        pane.reloadChangedFiles([large])
+        #expect(pane.directoryReads.task == opening && !opening.isCancelled)
+        first.finish(.success([small]))
         await opening.value
-        #expect(pane.reloadChangedFiles([small]) == nil && pane.directoryReads.task == nil)
+        pane.reloadChangedFiles([small])
+        #expect(reads.requests.count == 1 && pane.directoryReads.task == nil)
 
         pane.reload()
         let underWay = try #require(pane.directoryReads.task)
-        let waiting = try #require(pane.reloadChangedFiles([large]))
+        pane.reloadChangedFiles([large])
         #expect(pane.directoryReads.task == underWay && !underWay.isCancelled)
         try await reads.request(1).finish(.success([small]))
         await underWay.value
-        await waiting.value
+
+        pane.reloadChangedFiles([large])
         let rereading = try #require(pane.directoryReads.task)
         try await reads.request(2).finish(.success([large]))
         await rereading.value
         #expect(pane.entries.map(\.size) == [8240])
         #expect(reads.requests.count == 3)
         #expect(tree.snapshot() == ["folder/"])
+    }
+
+    @Test func growingAFileListedInAColumnUpdatesItsSizeAndDate() async throws {
+        let environment = try IndependentEnvironment()
+        let tree = try TestTree("exports/movie.mp4")
+        let movie = tree.url("exports/movie.mp4")
+        try Data(repeating: 0, count: 48).write(to: movie)
+        let oldDate = Date(timeIntervalSince1970: 1_600_000_000)
+        try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: movie.path)
+        let controller = ColumnBrowserViewController(
+            directoryReader: environment.services.directories, preferences: try Prefs.isolated(),
+            thumbnails: environment.services.thumbnails, itemInfo: environment.services.itemInfo,
+            copies: environment.services.copies, clipboard: environment.services.clipboard, statuses: try .isolated(),
+            names: FolderNames(read: FolderNames.read))
+        let pane = ColumnPane(folder: tree.url("exports"), controller: controller)
+        defer { pane.tearDown() }
+        pane.load(showHidden: false, order: ColumnBrowserViewController.defaultOrder(for: controller.preferences))
+        await pane.directoryReads.task?.value
+        try #require(pane.entries.map(\.size) == [48] && pane.entries.first?.modified == oldDate)
+
+        let writer = try FileHandle(forWritingTo: movie)
+        try writer.seekToEnd()
+        try writer.write(contentsOf: Data(repeating: 1, count: 8192))
+        try writer.close()
+        for _ in 0..<500 where pane.entries.first?.size != 8240 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(pane.entries.map(\.size) == [8240])
+        #expect(pane.entries.first?.modified != oldDate)
+        #expect(tree.snapshot() == ["exports/", "exports/movie.mp4"])
     }
 
     @Test(arguments: [true, false]) func directoryEntriesStayWatchedEvenWithASilentFileStream(starts: Bool) async throws {

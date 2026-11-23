@@ -470,22 +470,12 @@ final class BrowserViewController: NSViewController {
     }
 
     /// `current`: files of the folder shown as they are now. One listed with another size or date reads the folder
-    /// again, after a read under way rather than in its place, and not at all if that read already saw it. Returns
-    /// the wait for that read, if there is one.
-    @discardableResult
-    func refreshChangedFiles(_ current: [FileEntry]) -> Task<Void, Never>? {
-        guard let folder = directory, !isShowingResults,
+    /// again, unless a read is under way: that one reads them anew.
+    func refreshChangedFiles(_ current: [FileEntry]) {
+        guard directory != nil, !isShowingResults, directoryReads.task == nil,
               current.contains(where: { ListingWatch.differs(listing.node(forKey: $0.locationKey)?.entry, from: $0) })
-        else { return nil }
-        if let read = directoryReads.task {
-            return Task { [weak self] in
-                await read.value
-                guard let self, directory == folder else { return }
-                await refreshChangedFiles(current)?.value
-            }
-        }
+        else { return }
         refresh()
-        return nil
     }
 
     /// Shows `entries`. `fromTop`: a folder just opened, shown from its top before anything it selects is scrolled to.

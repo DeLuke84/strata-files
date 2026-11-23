@@ -197,22 +197,12 @@ final class ColumnPane: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     /// `current`: files of this column's folder as they are now. One listed with another size or date reads the folder
-    /// again, after a read under way rather than in its place, and not at all if that read already saw it. Returns
-    /// the wait for that read, if there is one.
-    @discardableResult
-    func reloadChangedFiles(_ current: [FileEntry]) -> Task<Void, Never>? {
-        guard let watched = watchedFolder, current.contains(where: { file in
-            ListingWatch.differs(entries.first { $0.locationKey == file.locationKey }, from: file)
-        }) else { return nil }
-        if let read = directoryReads.task {
-            return Task { [weak self] in
-                await read.value
-                guard let self, watchedFolder == watched else { return }
-                await reloadChangedFiles(current)?.value
-            }
-        }
+    /// again, unless a read is under way: that one reads them anew.
+    func reloadChangedFiles(_ current: [FileEntry]) {
+        guard directoryReads.task == nil else { return }
+        let listed = Dictionary(entries.map { ($0.locationKey, $0) }, uniquingKeysWith: { first, _ in first })
+        guard current.contains(where: { ListingWatch.differs(listed[$0.locationKey], from: $0) }) else { return }
         reload()
-        return nil
     }
 
     func reload(after watched: Task<Void, Never>? = nil) {
