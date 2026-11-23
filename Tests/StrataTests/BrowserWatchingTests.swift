@@ -1,12 +1,56 @@
+import CoreServices
 import Foundation
 import Synchronization
 import Testing
 @testable import Strata
 @testable import StrataDev
+import StrataIndex
 
 /// A pane watches the folder it shows and that folder's repository; what it found for a folder it no longer shows is
 /// dropped (late results never win).
 @MainActor struct BrowserWatchingTests {
+    @Test func growingAnAlreadyListedFileUpdatesItsSizeAndDate() async throws {
+        let tree = try TestTree("exports/movie.mp4")
+        let movie = tree.url("exports/movie.mp4")
+        try Data(repeating: 0, count: 48).write(to: movie)
+        let oldDate = Date(timeIntervalSince1970: 1_600_000_000)
+        try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: movie.path)
+        let environment = try IndependentEnvironment()
+        let browser = BrowserViewController(services: environment.services)
+        defer { browser.stopBackgroundWork() }
+        _ = browser.view
+        browser.load(tree.url("exports"))
+        await browser.directoryReads.task?.value
+        let row = try #require(browser.visibleRows.first)
+        try #require(row.entry.size == 48 && row.entry.modified == oldDate)
+
+        let writer = try FileHandle(forWritingTo: movie)
+        try writer.seekToEnd()
+        try writer.write(contentsOf: Data(repeating: 1, count: 8192))
+        try writer.close()
+        for _ in 0..<500 where row.entry.size != 8240 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(browser.visibleRows.first === row)
+        #expect(row.entry.size == 8240)
+        #expect(row.entry.modified != oldDate)
+        #expect(tree.snapshot() == ["exports/", "exports/movie.mp4"])
+    }
+
+    @Test func onlyShownFoldersAndTheirDirectChildrenRefreshUnlessEventsWereLost() {
+        let roots: Set<String> = ["/private/tmp/exports", "/second"]
+        func affects(_ path: String, _ flags: Int = 0) -> Bool {
+            ListingWatch.affectsListing(.init(path: path, flags: FSEventStreamEventFlags(flags), id: 1), roots: roots)
+        }
+        #expect(affects("/tmp/exports"))
+        #expect(affects("/private/tmp/exports/movie.mp4"))
+        #expect(affects("/second/movie.mp4", kFSEventStreamEventFlagItemInodeMetaMod))
+        #expect(!affects("/tmp/exports-old/movie.mp4"))
+        #expect(!affects("/second/nested/movie.mp4"))
+        #expect(affects("/second/nested", kFSEventStreamEventFlagMustScanSubDirs))
+        #expect(affects("/", kFSEventStreamEventFlagKernelDropped))
+        #expect(affects("/", kFSEventStreamEventFlagUserDropped))
+        #expect(affects("/", kFSEventStreamEventFlagRootChanged))
+    }
+
     @Test func aRepositoryFoundAfterThePaneMovedOnOrStoppedIsDropped() async throws {
         let tree = try TestTree("repo/.git/HEAD", "repo/src/")
         let store = GitStatusStore()
