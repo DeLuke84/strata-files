@@ -213,7 +213,7 @@ final class ColumnPane: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let progressive = !isLoaded && sortedBy != nil
         statuses.tags.invalidate(folder)
         directoryReads.load(folder, showHidden: showHidden, applications: applications,
-                            sortedBy: sortedBy, after: watched, progressive: progressive,
+                            sortedBy: sortedBy, after: watched ?? listingWatch?.ready, progressive: progressive,
                             progress: { [weak self] listing, _ in
                                 guard let self else { return }
                                 spinner.stopAnimation(nil)

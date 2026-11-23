@@ -35,9 +35,9 @@ import StrataIndex
         #expect(tree.snapshot() == ["exports/", "exports/movie.mp4"])
     }
 
-    @Test func onlyShownFoldersAndTheirDirectChildrenRefreshUnlessEventsWereLost() {
+    @Test func onlyVisibleFileChangesAndOverlappingRecoveryEventsRefresh() {
         let roots: Set<String> = ["/private/tmp/exports", "/second"]
-        func affects(_ path: String, _ flags: Int = 0) -> Bool {
+        func affects(_ path: String, _ flags: Int = kFSEventStreamEventFlagItemModified) -> Bool {
             ListingWatch.affectsListing(.init(path: path, flags: FSEventStreamEventFlags(flags), id: 1), roots: roots)
         }
         #expect(affects("/tmp/exports"))
@@ -45,10 +45,34 @@ import StrataIndex
         #expect(affects("/second/movie.mp4", kFSEventStreamEventFlagItemInodeMetaMod))
         #expect(!affects("/tmp/exports-old/movie.mp4"))
         #expect(!affects("/second/nested/movie.mp4"))
+        #expect(!affects("/second/new", kFSEventStreamEventFlagItemCreated))
+        #expect(!affects("/second/old", kFSEventStreamEventFlagItemRenamed))
+        #expect(!affects("/tmp", kFSEventStreamEventFlagItemModified))
+        for flag in [kFSEventStreamEventFlagMustScanSubDirs, kFSEventStreamEventFlagKernelDropped,
+                     kFSEventStreamEventFlagUserDropped] {
+            #expect(affects("/tmp", flag))
+            #expect(affects("/second", flag))
+            #expect(!affects("/second/deep/nested", flag))
+            #expect(!affects("/second-lookalike", flag))
+        }
         #expect(affects("/second/nested", kFSEventStreamEventFlagMustScanSubDirs))
         #expect(affects("/", kFSEventStreamEventFlagKernelDropped))
         #expect(affects("/", kFSEventStreamEventFlagUserDropped))
         #expect(affects("/", kFSEventStreamEventFlagRootChanged))
+    }
+
+    @Test(arguments: [true, false]) func directoryEntriesStayWatchedEvenWithASilentFileStream(starts: Bool) async throws {
+        let tree = try TestTree("folder/")
+        let changes = Mutex(0)
+        let watching = ListingWatch([tree.url("folder")], startStream: { _, _ in starts }) {
+            changes.withLock { $0 += 1 }
+        }
+        await watching.ready.value
+        try tree.add(["folder/new.txt"])
+        for _ in 0..<500 where changes.withLock({ $0 }) == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(changes.withLock { $0 } > 0)
+        withExtendedLifetime(watching) {}
+        #expect(tree.snapshot() == ["folder/", "folder/new.txt"])
     }
 
     @Test func aRepositoryFoundAfterThePaneMovedOnOrStoppedIsDropped() async throws {
