@@ -12,7 +12,6 @@ nonisolated final class ListingWatch: Sendable {
     private let changes: LatestUpdate<Void>
     private let edits: LatestUpdate<Void>
     private let opened: Task<[DirectoryWatcher], Never>
-    private let started: Task<Void, Never>
     private let stream = FSEventsStream()
 
     typealias StartStream = @Sendable (FSEventsStream, [String]) -> Bool
@@ -37,13 +36,9 @@ nonisolated final class ListingWatch: Sendable {
         }
         self.changes = changes
         self.edits = edits
-        let opened = Task.detached { () -> [DirectoryWatcher] in
+        let opened = Task.detached { [stream] () -> [DirectoryWatcher] in
             guard !folders.isEmpty else { return [] }
-            return await DirectoryWatcher.watching(folders) { changes.send(()) }
-        }
-        // Reads wait only for the directory watchers, as before; the file events start beside them.
-        let started = Task.detached { [stream] in
-            guard !folders.isEmpty else { return }
+            let watchers = await DirectoryWatcher.watching(folders) { changes.send(()) }
             await OwnThread.run {
                 let roots = Set(folders.map { PathSpelling.system($0.resolvingSymlinksInPath().path) })
                 stream.handler = { events in
@@ -62,9 +57,9 @@ nonisolated final class ListingWatch: Sendable {
                 }
                 _ = startStream(stream, Array(roots))
             }
+            return watchers
         }
         self.opened = opened
-        self.started = started
         ready = Task { _ = await opened.value }
     }
 
@@ -94,8 +89,8 @@ nonisolated final class ListingWatch: Sendable {
         changes.cancel()
         edits.cancel()
         // Start and stop must never race; neither waits on the presentation's thread.
-        Task.detached { [started, stream] in
-            await started.value
+        Task.detached { [opened, stream] in
+            _ = await opened.value
             stream.stop()
         }
     }

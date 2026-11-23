@@ -199,9 +199,9 @@ final class ColumnPane: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// `current`: files of this column's folder as they are now. One listed with another size or date reads the folder
     /// again, unless a read is under way: that one reads them anew.
     func reloadChangedFiles(_ current: [FileEntry]) {
-        guard directoryReads.task == nil, current.contains(where: { file in
-            ListingWatch.differs(rowByKey[file.url.fileViewKey].map { entries[$0] }, from: file)
-        }) else { return }
+        guard directoryReads.task == nil else { return }
+        let listed = Dictionary(entries.map { ($0.locationKey, $0) }, uniquingKeysWith: { first, _ in first })
+        guard current.contains(where: { ListingWatch.differs(listed[$0.locationKey], from: $0) }) else { return }
         reload()
     }
 
