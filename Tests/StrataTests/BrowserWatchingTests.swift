@@ -199,6 +199,24 @@ import StrataIndex
         #expect(tree.snapshot() == ["exports/", "exports/movie.mp4"])
     }
 
+    @Test func readsWaitOnlyForTheDirectoryWatchersNotTheFileStream() async throws {
+        let tree = try TestTree("folder/")
+        let starting = DispatchSemaphore(value: 0)
+        let changes = Mutex(0)
+        var watching: ListingWatch? = ListingWatch([tree.url("folder")], startStream: { _, _ in
+            starting.wait()
+            return true
+        }) { changes.withLock { $0 += 1 } }
+        // The stream hasn't started, and won't until it's let go: the watch is ready and entries are reported.
+        await watching?.ready.value
+        try tree.add(["folder/new.txt"])
+        for _ in 0..<500 where changes.withLock({ $0 }) == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(changes.withLock { $0 } > 0)
+        starting.signal()
+        watching = nil
+        #expect(tree.snapshot() == ["folder/", "folder/new.txt"])
+    }
+
     @Test(arguments: [true, false]) func directoryEntriesStayWatchedEvenWithASilentFileStream(starts: Bool) async throws {
         let tree = try TestTree("folder/")
         let changes = Mutex(0)
