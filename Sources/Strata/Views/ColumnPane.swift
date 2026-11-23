@@ -190,9 +190,29 @@ final class ColumnPane: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private func watch(_ watched: URL) -> Task<Void, Never> {
         watchedFolder = watched
         let directories = (controller?.applicationFolders ?? .standard).directories(for: watched)
-        let watch = ListingWatch(directories) { [weak self] in self?.reload() }
+        let watch = ListingWatch(directories, changed: { [weak self] in self?.reload() },
+                                 filesChanged: { [weak self] in self?.reloadChangedFiles($0) })
         listingWatch = watch
         return watch.ready
+    }
+
+    /// `current`: files of this column's folder as they are now. One listed with another size or date reads the folder
+    /// again, after a read under way rather than in its place, and not at all if that read already saw it. Returns
+    /// the wait for that read, if there is one.
+    @discardableResult
+    func reloadChangedFiles(_ current: [FileEntry]) -> Task<Void, Never>? {
+        guard let watched = watchedFolder, current.contains(where: { file in
+            ListingWatch.differs(entries.first { $0.locationKey == file.locationKey }, from: file)
+        }) else { return nil }
+        if let read = directoryReads.task {
+            return Task { [weak self] in
+                await read.value
+                guard let self, watchedFolder == watched else { return }
+                await reloadChangedFiles(current)?.value
+            }
+        }
+        reload()
+        return nil
     }
 
     func reload(after watched: Task<Void, Never>? = nil) {

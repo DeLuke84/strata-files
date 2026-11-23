@@ -12,16 +12,19 @@ import Foundation
     /// Finding the repository the folder is in, away from the main thread.
     private(set) var finding: Task<Void, Never>?
 
-    /// Watches `folders` (calling `changed` on a change) and the repository `folder` is in, while `isCurrent` holds,
+    /// Watches `folders` (calling `changed` on a change, and `filesChanged` with files in them that may have changed
+    /// in place, as they are now) and the repository `folder` is in, while `isCurrent` holds,
     /// each opened or found away from the main thread and kept only if the folder is still shown then. Returns once
     /// the folders are watched, for a read to wait on: no change made after the read began is missed. The repository
     /// is found apart, so a read never waits for it.
     @discardableResult
     func watch(_ folders: [URL], repositoryOf folder: URL, in store: GitStatusStore,
-               changed: @escaping @MainActor @Sendable () -> Void, isCurrent: @escaping () -> Bool) -> Task<Void, Never> {
+               changed: @escaping @MainActor @Sendable () -> Void,
+               filesChanged: @escaping @MainActor @Sendable ([FileEntry]) -> Void,
+               isCurrent: @escaping () -> Bool) -> Task<Void, Never> {
         stop()
         self.folder = folder
-        let listing = ListingWatch(folders, changed: changed)
+        let listing = ListingWatch(folders, changed: changed, filesChanged: filesChanged)
         self.listing = listing
         finding = Task { [weak self] in
             let observation = await store.observe(folder)
